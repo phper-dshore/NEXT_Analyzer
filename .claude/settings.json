@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /Users/zhangkaibin/Documents/claude/8-高速线网分测试/app)"
+    ],
+    "additionalDirectories": [
+      "/Users/zhangkaibin/Documents/claude/8-高速线网分测试"
+    ]
+  }
+}
