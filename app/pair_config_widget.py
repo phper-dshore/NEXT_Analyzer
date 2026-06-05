@@ -157,5 +157,12 @@ class PairConfigWidget(QWidget):
                 selected.append((pa, pb))
         return selected
 
+    def set_total_pairs(self, value: int):
+        """Set total pairs from external source (e.g. project settings)."""
+        self._total_pairs = value
+        self.pairs_spin.setValue(value)
+        self._rebuild_checkboxes()
+        self._emit_selection()
+
     def get_total_pairs(self) -> int:
         return self._total_pairs

@@ -48,6 +48,9 @@ class VNAController:
         self.connected = False
         self.simulation_mode = not _HAS_VISA
         self._id = ""
+        self._sim_freq_start = 100e3
+        self._sim_freq_stop = 500e6
+        self._sim_points = 201
 
     def list_resources(self) -> list:
         """List available VISA resources."""
@@ -138,6 +141,10 @@ class VNAController:
         self._write(SCPI_SET_POINTS.format(points))
         # Set format to dB/angle (Touchstone DB format)
         self._write(SCPI_EXPORT_FORMAT.format("DB"))
+        # Store for simulation file generation
+        self._sim_freq_start = freq_start_hz
+        self._sim_freq_stop = freq_stop_hz
+        self._sim_points = points
 
     def trigger_and_save(self, save_path: str) -> bool:
         """Trigger a measurement and save to S4P file.
@@ -151,7 +158,12 @@ class VNAController:
         if self.simulation_mode:
             logger.info(f"SIM: Trigger measurement and save to {save_path}")
             # In simulation, create a placeholder file
-            self._create_simulated_s4p(save_path)
+            self._create_simulated_s4p(
+                save_path,
+                freq_start_hz=self._sim_freq_start,
+                freq_stop_hz=self._sim_freq_stop,
+                points=self._sim_points
+            )
             return True
 
         if not self.connected:
@@ -214,13 +226,23 @@ class VNAController:
         if self.instrument:
             self.instrument.write(command)
 
-    def _create_simulated_s4p(self, filepath: str):
-        """Create a simulated S4P file for testing without VNA."""
+    def _create_simulated_s4p(self, filepath: str,
+                              freq_start_hz: float = 100e3,
+                              freq_stop_hz: float = 500e6,
+                              points: int = 201):
+        """Create a simulated S4P file for testing without VNA.
+
+        Args:
+            filepath: Output file path.
+            freq_start_hz: Start frequency in Hz (default 100 kHz).
+            freq_stop_hz: Stop frequency in Hz (default 500 MHz).
+            points: Number of frequency points (default 201).
+        """
         import numpy as np
 
         # Generate simulated 4-port S-parameters
-        n_points = 201
-        freqs = np.linspace(100e3, 500e6, n_points)
+        n_points = points
+        freqs = np.linspace(freq_start_hz, freq_stop_hz, n_points)
 
         with open(filepath, 'w') as f:
             f.write("! Simulated S4P file for testing\n")

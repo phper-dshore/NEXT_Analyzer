@@ -14,7 +14,7 @@ import matplotlib
 
 def _apply_plot_style(axes, title: str, xscale: str = 'linear'):
     """Apply consistent plot styling to an axes object."""
-    axes.set_xlabel("频率 (MHz)")
+    axes.set_xlabel("频率 (GHz)")
     axes.set_ylabel("幅度 (dB)")
     axes.set_title(title)
     axes.grid(True, alpha=0.3)
@@ -54,8 +54,8 @@ def _build_pair_figure(
         mask = (freq >= fmin) & (freq <= fmax)
         if not np.any(mask):
             continue
-        freq_mhz = freq[mask] / 1e6
-        ax.plot(freq_mhz, next_db[mask], label=label, linewidth=1.5)
+        freq_ghz = freq[mask] / 1e9
+        ax.plot(freq_ghz, next_db[mask], label=label, linewidth=1.5)
 
     for name, freqs, values, color, visible in limit_lines:
         if not visible:
@@ -63,7 +63,7 @@ def _build_pair_figure(
         mask = (freqs >= fmin) & (freqs <= fmax)
         if not np.any(mask):
             continue
-        freq_mhz = freqs[mask] / 1e6
+        freq_ghz = freqs[mask] / 1e9
         ax.plot(
             freq_mhz, values[mask],
             label=name, color=color,
@@ -74,7 +74,7 @@ def _build_pair_figure(
 
     # Set axis limits if frequency range is specified
     if freq_range is not None:
-        ax.set_xlim(freq_range[0] / 1e6, freq_range[1] / 1e6)
+        ax.set_xlim(freq_range[0] / 1e9, freq_range[1] / 1e9)
 
     handles, labels = ax.get_legend_handles_labels()
     if handles:
@@ -110,12 +110,12 @@ def export_csv(parent: QWidget, frequencies: np.ndarray, curves: List[Tuple[str,
     try:
         with open(filepath, 'w', newline='') as f:
             writer = csv.writer(f)
-            header = ["频率 (MHz)"] + [label for label, _ in curves]
+            header = ["频率 (GHz)"] + [label for label, _ in curves]
             writer.writerow(header)
 
-            freq_mhz = frequencies / 1e6
+            freq_ghz = frequencies / 1e9
             for i in range(len(frequencies)):
-                row = [f"{freq_mhz[i]:.4f}"]
+                row = [f"{freq_ghz[i]:.6f}"]
                 for _, data in curves:
                     row.append(f"{data[i]:.4f}" if i < len(data) else "")
                 writer.writerow(row)

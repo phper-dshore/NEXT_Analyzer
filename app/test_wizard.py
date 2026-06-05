@@ -128,15 +128,15 @@ class TestWizard(QWizard):
 
         freq_layout = QHBoxLayout()
         self.freq_start_spin = QDoubleSpinBox()
-        self.freq_start_spin.setDecimals(1)
-        self.freq_start_spin.setRange(0.01, 100000)
+        self.freq_start_spin.setDecimals(4)
+        self.freq_start_spin.setRange(0.0001, 100)
         self.freq_start_spin.setValue(0.1)
-        self.freq_start_spin.setSuffix(" MHz")
+        self.freq_start_spin.setSuffix(" GHz")
         self.freq_stop_spin = QDoubleSpinBox()
-        self.freq_stop_spin.setDecimals(1)
-        self.freq_stop_spin.setRange(0.1, 100000)
-        self.freq_stop_spin.setValue(500)
-        self.freq_stop_spin.setSuffix(" MHz")
+        self.freq_stop_spin.setDecimals(4)
+        self.freq_stop_spin.setRange(0.001, 100)
+        self.freq_stop_spin.setValue(0.5)
+        self.freq_stop_spin.setSuffix(" GHz")
         freq_layout.addWidget(QLabel("起始:"))
         freq_layout.addWidget(self.freq_start_spin)
         freq_layout.addWidget(QLabel("终止:"))
@@ -295,25 +295,20 @@ class TestWizard(QWizard):
         """Pre-fill config from project settings."""
         self.project = project
         self.pairs_spin.setValue(project.total_pairs)
-        self.freq_start_spin.setValue(project.display_freq_start / 1e6)
-        self.freq_stop_spin.setValue(project.display_freq_stop / 1e6)
+        self.freq_start_spin.setValue(project.display_freq_start / 1e9)
+        self.freq_stop_spin.setValue(project.display_freq_stop / 1e9)
 
     def set_save_folder(self, folder: str):
         """Set the default save folder."""
         self.folder_edit.setText(folder)
-        """Pre-fill config from project settings."""
-        self.project = project
-        self.pairs_spin.setValue(project.total_pairs)
-        self.freq_start_spin.setValue(project.display_freq_start / 1e6)
-        self.freq_stop_spin.setValue(project.display_freq_stop / 1e6)
 
     def _collect_config(self):
         """Read config values from UI."""
         self._visa_address = self.visa_combo.currentText().strip()
         self._save_folder = self.folder_edit.text().strip()
         self._total_pairs = self.pairs_spin.value()
-        self._freq_start = int(self.freq_start_spin.value() * 1e6)
-        self._freq_stop = int(self.freq_stop_spin.value() * 1e6)
+        self._freq_start = int(self.freq_start_spin.value() * 1e9)
+        self._freq_stop = int(self.freq_stop_spin.value() * 1e9)
         self._sweep_points = self.points_spin.value()
 
     def validateCurrentPage(self):

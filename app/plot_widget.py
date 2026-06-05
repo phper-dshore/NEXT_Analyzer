@@ -84,7 +84,7 @@ class PlotWidget(QWidget):
         self._setup_axes()
 
     def _setup_axes(self):
-        self.axes.set_xlabel("频率 (MHz)")
+        self.axes.set_xlabel("频率 (GHz)")
         self.axes.set_ylabel("幅度 (dB)")
         self.axes.set_title(self._title)
         self.axes.grid(True, alpha=0.3)
@@ -170,8 +170,8 @@ class PlotWidget(QWidget):
             if len(clipped_freq) == 0:
                 continue
 
-            freq_mhz = clipped_freq / 1e6
-            self.axes.plot(freq_mhz, clipped_db, label=label, linewidth=1.5)
+            freq_ghz = clipped_freq / 1e9
+            self.axes.plot(freq_ghz, clipped_db, label=label, linewidth=1.5)
 
         for line in self._limit_lines:
             if not line['visible']:
@@ -187,14 +187,14 @@ class PlotWidget(QWidget):
             if len(clipped_freq) == 0:
                 continue
 
-            freq_mhz = clipped_freq / 1e6
+            freq_ghz = clipped_freq / 1e9
             self.axes.plot(
                 freq_mhz, clipped_val,
                 label=line['name'], color=line['color'],
                 linewidth=2.0, linestyle='--'
             )
 
-        self.axes.set_xlabel("频率 (MHz)")
+        self.axes.set_xlabel("频率 (GHz)")
         self.axes.set_ylabel("幅度 (dB)")
         self.axes.set_title(self._title)
         self.axes.grid(True, alpha=0.3)
@@ -206,7 +206,7 @@ class PlotWidget(QWidget):
 
         # Set x-axis limits based on frequency range if configured
         if self._freq_start_hz is not None and self._freq_stop_hz is not None:
-            self.axes.set_xlim(self._freq_start_hz / 1e6, self._freq_stop_hz / 1e6)
+            self.axes.set_xlim(self._freq_start_hz / 1e9, self._freq_stop_hz / 1e9)
 
         handles, labels = self.axes.get_legend_handles_labels()
         if handles:
