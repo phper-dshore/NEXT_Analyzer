@@ -84,18 +84,19 @@ class TestWizard(QWizard):
 
         addr_layout = QHBoxLayout()
         self.visa_combo = QComboBox()
-        self.visa_combo.setEditable(True)
-        self.visa_combo.setPlaceholderText("TCPIP0::192.168.1.100::inst0::INSTR")
+        self.visa_combo.setEditable(False)
+        self.visa_combo.setPlaceholderText("点击「刷新」检测仪器...")
         self.refresh_btn = QPushButton("刷新")
         self.refresh_btn.clicked.connect(self._refresh_visa_resources)
         addr_layout.addWidget(self.visa_combo)
         addr_layout.addWidget(self.refresh_btn)
 
-        vna_layout.addRow("VISA 地址:", addr_layout)
+        vna_layout.addRow("检测到的仪器:", addr_layout)
 
-        self.connect_btn = QPushButton("连接测试")
+        self.connect_btn = QPushButton("测试连接")
         self.connect_btn.clicked.connect(self._test_vna_connection)
         self.connect_status = QLabel("未连接")
+        self.connect_status.setStyleSheet("color: #888;")
         connect_row = QHBoxLayout()
         connect_row.addWidget(self.connect_btn)
         connect_row.addWidget(self.connect_status)
@@ -238,27 +239,52 @@ class TestWizard(QWizard):
         return page
 
     def _refresh_visa_resources(self):
+        """Auto-detect instruments configured in Keysight Connection Expert."""
         self.visa_combo.clear()
+        QApplication.processEvents()
         resources = self.vna.list_resources()
-        for r in resources:
-            self.visa_combo.addItem(r)
         if resources:
-            self._append_log(f"找到 {len(resources)} 个 VISA 资源")
+            for r in resources:
+                self.visa_combo.addItem(r)
+            self._append_log(f"检测到 {len(resources)} 个仪器: "
+                             f"{' / '.join(resources)}")
+            # Auto-select first and test connection
+            self.visa_combo.setCurrentIndex(0)
+            self._test_vna_connection()
+        else:
+            self.visa_combo.addItem("未检测到仪器，将使用模拟模式")
+            self.visa_combo.setCurrentIndex(0)
+            self.connect_status.setText("模拟模式")
+            self.connect_status.setStyleSheet("color: orange;")
+            self.vna.simulation_mode = True
+            self.vna.connected = True
+            self._append_log("未检测到 VNA 仪器，将使用模拟模式进行测试")
 
     def _test_vna_connection(self):
         address = self.visa_combo.currentText().strip()
-        if address:
-            self.connect_status.setText("连接中...")
-            QApplication.processEvents()
-            success = self.vna.connect(address)
-            if success:
-                self.connect_status.setText(f"已连接: {self.vna.get_id()}")
-                self._append_log(f"VNA 连接成功: {self.vna.get_id()}")
-            else:
-                self.connect_status.setText("连接失败，使用模拟模式")
-                self._append_log("VNA 连接失败，将使用模拟模式")
+        if not address or "未检测到" in address:
+            self.connect_status.setText("模拟模式")
+            self.connect_status.setStyleSheet("color: orange;")
+            return
+
+        self.connect_btn.setEnabled(False)
+        self.connect_status.setText("连接中...")
+        self.connect_status.setStyleSheet("color: #888;")
+        QApplication.processEvents()
+
+        success = self.vna.connect(address)
+        if success:
+            short_id = self.vna.get_id().split(',')[1] if ',' in self.vna.get_id() else self.vna.get_id()
+            self.connect_status.setText(f"✓ 已连接: {short_id}")
+            self.connect_status.setStyleSheet("color: green; font-weight: bold;")
+            self._append_log(f"VNA 连接成功: {self.vna.get_id()}")
         else:
-            QMessageBox.warning(self, "提示", "请先输入 VISA 地址")
+            self.connect_status.setText("⚠ 连接失败，使用模拟模式")
+            self.connect_status.setStyleSheet("color: orange;")
+            self.vna.simulation_mode = True
+            self.vna.connected = True
+            self._append_log("VNA 连接失败，切换到模拟模式")
+        self.connect_btn.setEnabled(True)
 
     def _browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "选择保存文件夹")
@@ -266,6 +292,15 @@ class TestWizard(QWizard):
             self.folder_edit.setText(folder)
 
     def initialize_from_project(self, project: Project):
+        """Pre-fill config from project settings."""
+        self.project = project
+        self.pairs_spin.setValue(project.total_pairs)
+        self.freq_start_spin.setValue(project.display_freq_start / 1e6)
+        self.freq_stop_spin.setValue(project.display_freq_stop / 1e6)
+
+    def set_save_folder(self, folder: str):
+        """Set the default save folder."""
+        self.folder_edit.setText(folder)
         """Pre-fill config from project settings."""
         self.project = project
         self.pairs_spin.setValue(project.total_pairs)
@@ -299,7 +334,11 @@ class TestWizard(QWizard):
 
     def initializePage(self, page_id: int):
         """Called when a page becomes visible."""
-        if self.page(page_id).title() == "自动测试":
+        title = self.page(page_id).title()
+        if title == "测试配置":
+            # Auto-detect VNA instruments when config page opens
+            QTimer.singleShot(200, self._refresh_visa_resources)
+        elif title == "自动测试":
             self._start_test_session()
 
     def _start_test_session(self):
