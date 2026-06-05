@@ -37,6 +37,17 @@ class Project:
     total_pairs: int = 8
     measurements: List[Measurement] = field(default_factory=list)
     limit_lines: List[LimitLine] = field(default_factory=list)
+    display_freq_start: float = 100e3    # Hz - display frequency range start
+    display_freq_stop: float = 500e6     # Hz - display frequency range stop
+
+    @property
+    def test_combinations(self) -> List[Tuple[int, int]]:
+        """Get all pair combinations that need to be tested, ordered."""
+        combos = []
+        for i in range(1, self.total_pairs + 1):
+            for j in range(i + 1, self.total_pairs + 1):
+                combos.append((i, j))
+        return combos
 
     def add_measurement(self, measurement: Measurement):
         """Add a measurement and ensure pair numbers are within range."""

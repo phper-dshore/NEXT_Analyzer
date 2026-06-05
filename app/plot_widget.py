@@ -58,6 +58,8 @@ class PlotWidget(QWidget):
         self._curve_data = {}
         self._limit_lines = []
         self._xscale = 'linear'
+        self._freq_start_hz = None   # Display range: None = auto
+        self._freq_stop_hz = None
         self._init_ui()
 
     def _init_ui(self):
@@ -122,6 +124,17 @@ class PlotWidget(QWidget):
             }
         self.refresh()
 
+    def set_freq_range(self, start_hz: float, stop_hz: float):
+        """Set display frequency range. Data outside this range is clipped.
+
+        Args:
+            start_hz: Start frequency in Hz (None for auto).
+            stop_hz: Stop frequency in Hz (None for auto).
+        """
+        self._freq_start_hz = start_hz
+        self._freq_stop_hz = stop_hz
+        self.refresh()
+
     def set_limit_lines(self, lines: List[Tuple[str, np.ndarray, np.ndarray, str, bool]]):
         """Set limit lines.
 
@@ -135,22 +148,48 @@ class PlotWidget(QWidget):
         self.refresh()
 
     def refresh(self):
-        """Redraw the plot."""
+        """Redraw the plot with frequency range clipping."""
         self.axes.cla()
         self._setup_axes()
+
+        # Determine display frequency limits
+        fmin = self._freq_start_hz if self._freq_start_hz else 0
+        fmax = self._freq_stop_hz if self._freq_stop_hz else float('inf')
 
         for label, data in self._curve_data.items():
             if not data['visible']:
                 continue
-            freq_mhz = data['freq'] / 1e6
-            self.axes.plot(freq_mhz, data['next_db'], label=label, linewidth=1.5)
+            freq = data['freq']
+            next_db = data['next_db']
+
+            # Clip to frequency range
+            mask = (freq >= fmin) & (freq <= fmax)
+            clipped_freq = freq[mask]
+            clipped_db = next_db[mask]
+
+            if len(clipped_freq) == 0:
+                continue
+
+            freq_mhz = clipped_freq / 1e6
+            self.axes.plot(freq_mhz, clipped_db, label=label, linewidth=1.5)
 
         for line in self._limit_lines:
             if not line['visible']:
                 continue
-            freq_mhz = line['freq'] / 1e6
+            freq = line['freq']
+            value = line['value']
+
+            # Clip limit lines too
+            mask = (freq >= fmin) & (freq <= fmax)
+            clipped_freq = freq[mask]
+            clipped_val = value[mask]
+
+            if len(clipped_freq) == 0:
+                continue
+
+            freq_mhz = clipped_freq / 1e6
             self.axes.plot(
-                freq_mhz, line['value'],
+                freq_mhz, clipped_val,
                 label=line['name'], color=line['color'],
                 linewidth=2.0, linestyle='--'
             )
@@ -164,6 +203,10 @@ class PlotWidget(QWidget):
             self.axes.set_xscale('log')
         else:
             self.axes.set_xscale('linear')
+
+        # Set x-axis limits based on frequency range if configured
+        if self._freq_start_hz is not None and self._freq_stop_hz is not None:
+            self.axes.set_xlim(self._freq_start_hz / 1e6, self._freq_stop_hz / 1e6)
 
         handles, labels = self.axes.get_legend_handles_labels()
         if handles:

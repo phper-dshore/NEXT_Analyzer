@@ -1,6 +1,6 @@
 """
 Main application window for the S4P Network Analyzer tool.
-Tab-based interface: each pair combination has its own plot tab.
+Tab-based interface with VNA auto-test wizard.
 """
 
 import os
@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QAction, QFileDialog, QMessageBox, QSplitter,
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel,
     QListWidget, QListWidgetItem, QApplication, QGroupBox,
-    QCheckBox, QGridLayout
+    QCheckBox, QDoubleSpinBox, QFormLayout
 )
 import numpy as np
 from PyQt5.QtCore import Qt
@@ -21,6 +21,7 @@ from app.plot_widget import PlotWidget
 from app.pair_config_widget import PairConfigWidget
 from app.limit_line_dialog import LimitLineDialog
 from app.export import export_figure, export_csv, export_pdf_report
+from app.test_wizard import TestWizard
 
 
 class MainWindow(QMainWindow):
@@ -51,13 +52,13 @@ class MainWindow(QMainWindow):
 
         self.pair_config = PairConfigWidget()
         self.pair_config.total_pairs_changed.connect(self._on_total_pairs_changed)
-        self.pair_config.pair_selection_changed.connect(self._on_selection_changed)
+        self.pair_config.pair_selection_changed.connect(self._rebuild_tabs)
         left_layout.addWidget(self.pair_config)
 
         import_group = QGroupBox("已导入的文件")
         import_layout = QVBoxLayout(import_group)
         self.file_list = QListWidget()
-        self.file_list.setMaximumHeight(150)
+        self.file_list.setMaximumHeight(120)
         import_layout.addWidget(self.file_list)
 
         import_btn_layout = QHBoxLayout()
@@ -67,9 +68,35 @@ class MainWindow(QMainWindow):
         import_btn_layout.addWidget(self.import_btn)
         import_btn_layout.addStretch()
         import_layout.addLayout(import_btn_layout)
-
         left_layout.addWidget(import_group)
 
+        # Frequency range group
+        freq_group = QGroupBox("显示频率范围")
+        freq_layout = QFormLayout(freq_group)
+
+        self.freq_start_spin = QDoubleSpinBox()
+        self.freq_start_spin.setDecimals(2)
+        self.freq_start_spin.setRange(0.01, 100000)
+        self.freq_start_spin.setValue(self.project.display_freq_start / 1e6)
+        self.freq_start_spin.setSuffix(" MHz")
+        self.freq_start_spin.valueChanged.connect(self._on_freq_range_changed)
+        freq_layout.addRow("起始:", self.freq_start_spin)
+
+        self.freq_stop_spin = QDoubleSpinBox()
+        self.freq_stop_spin.setDecimals(1)
+        self.freq_stop_spin.setRange(0.1, 100000)
+        self.freq_stop_spin.setValue(self.project.display_freq_stop / 1e6)
+        self.freq_stop_spin.setSuffix(" MHz")
+        self.freq_stop_spin.valueChanged.connect(self._on_freq_range_changed)
+        freq_layout.addRow("终止:", self.freq_stop_spin)
+
+        self.freq_range_label = QLabel("0.10 - 500.00 MHz")
+        self.freq_range_label.setStyleSheet("color: #888;")
+        freq_layout.addRow("", self.freq_range_label)
+
+        left_layout.addWidget(freq_group)
+
+        # NEXT calculation method
         calc_group = QGroupBox("NEXT 计算方式")
         calc_layout = QVBoxLayout(calc_group)
         self.power_sum_cb = QCheckBox("功率和 (Power Sum)")
@@ -134,6 +161,13 @@ class MainWindow(QMainWindow):
 
         tools_menu = menubar.addMenu("工具(&T)")
 
+        test_action = QAction("VNA 自动测试向导...", self)
+        test_action.setShortcut("Ctrl+T")
+        test_action.triggered.connect(self._open_test_wizard)
+        tools_menu.addAction(test_action)
+
+        tools_menu.addSeparator()
+
         limit_action = QAction("标准限值线管理...", self)
         limit_action.triggered.connect(self._manage_limit_lines)
         tools_menu.addAction(limit_action)
@@ -144,13 +178,26 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
+    def _get_display_freq_range(self):
+        """Get display frequency range in Hz."""
+        return self.freq_start_spin.value() * 1e6, self.freq_stop_spin.value() * 1e6
+
+    def _on_freq_range_changed(self):
+        """Handle frequency range changes."""
+        start_mhz = self.freq_start_spin.value()
+        stop_mhz = self.freq_stop_spin.value()
+        self.project.display_freq_start = start_mhz * 1e6
+        self.project.display_freq_stop = stop_mhz * 1e6
+        self.freq_range_label.setText(f"{start_mhz:.2f} - {stop_mhz:.1f} MHz")
+        self._rebuild_tabs()
+
     def _show_empty_tab(self):
-        """Show a placeholder tab when no data is loaded."""
         self.tab_widget.clear()
         placeholder = QWidget()
         layout = QVBoxLayout(placeholder)
         layout.addStretch()
-        label = QLabel("请在左侧导入 S4P 文件并选择要查看的线对组合")
+        label = QLabel("请在左侧导入 S4P 文件并选择要查看的线对组合\n\n"
+                       "或使用「工具 → VNA 自动测试向导」自动完成测试")
         label.setAlignment(Qt.AlignCenter)
         label.setStyleSheet("color: #888; font-size: 16px;")
         layout.addWidget(label)
@@ -158,11 +205,7 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(placeholder, "无数据")
 
     def _get_curves_for_pair(self, pa: int, pb: int):
-        """Get NEXT curve data for a specific pair combination.
-
-        Returns:
-            List of (label, frequencies_hz, next_db) tuples.
-        """
+        """Get NEXT curve data for a specific pair combination."""
         meas = self.project.get_measurement_for_pairs(pa, pb)
         if meas is None:
             return []
@@ -186,7 +229,6 @@ class MainWindow(QMainWindow):
         return curves
 
     def _get_limit_line_data(self):
-        """Get limit line data for plotting."""
         lines = []
         for line in self.project.limit_lines:
             if not line.points:
@@ -197,9 +239,10 @@ class MainWindow(QMainWindow):
         return lines
 
     def _rebuild_tabs(self):
-        """Rebuild the tab widget based on selected pair combinations."""
+        """Rebuild tabs with frequency range applied."""
         selected = self.pair_config.get_selected_combos()
         limit_lines = self._get_limit_line_data()
+        f_start, f_stop = self._get_display_freq_range()
 
         self.tab_widget.clear()
 
@@ -214,6 +257,7 @@ class MainWindow(QMainWindow):
 
             tab = PlotWidget(title=f"NEXT 线对 {pa}-{pb}")
             tab.set_curves_multi(curves)
+            tab.set_freq_range(f_start, f_stop)
 
             if limit_lines:
                 tab.set_limit_lines(limit_lines)
@@ -222,6 +266,29 @@ class MainWindow(QMainWindow):
 
         if self.tab_widget.count() == 0:
             self._show_empty_tab()
+
+    def _open_test_wizard(self):
+        """Open the VNA auto-test wizard."""
+        wizard = TestWizard(self)
+        wizard.initialize_from_project(self.project)
+
+        if wizard.exec_() == TestWizard.Accepted:
+            # Refresh UI with new data
+            self._refresh_file_list()
+            loaded_combos = set()
+            for m in self.project.measurements:
+                loaded_combos.add(
+                    (m.pair_a, m.pair_b) if m.pair_a < m.pair_b
+                    else (m.pair_b, m.pair_a)
+                )
+            self.pair_config.set_loaded_combos(loaded_combos)
+
+            # Update frequency range from wizard
+            self.freq_start_spin.setValue(self.project.display_freq_start / 1e6)
+            self.freq_stop_spin.setValue(self.project.display_freq_stop / 1e6)
+
+            self._update_status()
+            self._rebuild_tabs()
 
     def _import_files(self):
         total_pairs = self.pair_config.get_total_pairs()
@@ -256,7 +323,6 @@ class MainWindow(QMainWindow):
                     else (m.pair_b, m.pair_a)
                 )
             self.pair_config.set_loaded_combos(loaded_combos)
-
             self._update_status()
             self._rebuild_tabs()
 
@@ -293,9 +359,6 @@ class MainWindow(QMainWindow):
         self._update_status()
         self._rebuild_tabs()
 
-    def _on_selection_changed(self, selected_combos):
-        self._rebuild_tabs()
-
     def _manage_limit_lines(self):
         dialog = LimitLineDialog(limit_lines=self.project.limit_lines, parent=self)
         if dialog.exec_() == LimitLineDialog.Accepted:
@@ -303,7 +366,6 @@ class MainWindow(QMainWindow):
             self._rebuild_tabs()
 
     def _get_current_tab_plot(self):
-        """Get the PlotWidget of the current tab, if any."""
         idx = self.tab_widget.currentIndex()
         if idx >= 0:
             w = self.tab_widget.widget(idx)
@@ -321,13 +383,11 @@ class MainWindow(QMainWindow):
                       default_name=f"next_{tab_text.replace(' ', '_')}")
 
     def _export_pdf_report(self):
-        """Export a multi-page PDF report, one pair per page."""
         selected = self.pair_config.get_selected_combos()
         if not selected:
             QMessageBox.information(self, "提示", "没有选中的线对组合")
             return
 
-        # Build page data: list of (title, curves, limit_lines)
         pages = []
         for pa, pb in selected:
             curves = self._get_curves_for_pair(pa, pb)
@@ -339,7 +399,11 @@ class MainWindow(QMainWindow):
             return
 
         limit_lines = self._get_limit_line_data()
-        export_pdf_report(self, pages, limit_lines)
+
+        # Update export module to accept frequency range
+        from app.export import export_pdf_report as do_export
+        f_start, f_stop = self._get_display_freq_range()
+        do_export(self, pages, limit_lines, freq_range=(f_start, f_stop))
 
     def _export_csv(self):
         selected = self.pair_config.get_selected_combos()
@@ -396,7 +460,8 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "关于",
             "高速线网分析仪 - NEXT 串音分析\n\n"
-            "版本 2.0\n\n"
-            "用于读取网络分析仪 S4P 文件并分析近端串音 (NEXT) 数据。\n"
-            "支持自定义标准限值线对比、PDF 报告导出。"
+            "版本 2.1\n\n"
+            "支持 Keysight VNA 自动测试\n"
+            "读取 S4P 文件并分析近端串音 (NEXT) 数据\n"
+            "支持自定义标准限值线对比、PDF 报告导出"
         )

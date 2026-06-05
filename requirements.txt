@@ -2,3 +2,4 @@ PyQt5>=5.15.0
 matplotlib>=3.5.0
 numpy>=1.21.0
 PyInstaller>=5.0
+pyvisa>=1.13.0

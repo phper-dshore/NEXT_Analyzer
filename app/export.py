@@ -5,7 +5,7 @@ Supports single image export, CSV data export, and multi-page PDF report.
 
 import csv
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from PyQt5.QtWidgets import QFileDialog, QMessageBox, QWidget
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_pdf import PdfPages
@@ -29,6 +29,7 @@ def _build_pair_figure(
     curves: List[Tuple[str, np.ndarray, np.ndarray]],
     limit_lines: List[Tuple[str, np.ndarray, np.ndarray, str, bool]],
     xscale: str = 'linear',
+    freq_range: Optional[Tuple[float, float]] = None,
 ) -> Figure:
     """Build a matplotlib Figure for a single pair combination.
 
@@ -37,6 +38,7 @@ def _build_pair_figure(
         curves: List of (label, freq_hz, next_db).
         limit_lines: List of (name, freq_array, value_db_array, color, visible).
         xscale: 'linear' or 'log'.
+        freq_range: Optional (start_hz, stop_hz) for display clipping.
 
     Returns:
         A matplotlib Figure ready for rendering/saving.
@@ -44,21 +46,35 @@ def _build_pair_figure(
     fig = Figure(figsize=(8.5, 5.5), dpi=150)
     ax = fig.add_subplot(111)
 
+    # Frequency clipping limits
+    fmin = freq_range[0] if freq_range else 0
+    fmax = freq_range[1] if freq_range else float('inf')
+
     for label, freq, next_db in curves:
-        freq_mhz = freq / 1e6
-        ax.plot(freq_mhz, next_db, label=label, linewidth=1.5)
+        mask = (freq >= fmin) & (freq <= fmax)
+        if not np.any(mask):
+            continue
+        freq_mhz = freq[mask] / 1e6
+        ax.plot(freq_mhz, next_db[mask], label=label, linewidth=1.5)
 
     for name, freqs, values, color, visible in limit_lines:
         if not visible:
             continue
-        freq_mhz = freqs / 1e6
+        mask = (freqs >= fmin) & (freqs <= fmax)
+        if not np.any(mask):
+            continue
+        freq_mhz = freqs[mask] / 1e6
         ax.plot(
-            freq_mhz, values,
+            freq_mhz, values[mask],
             label=name, color=color,
             linewidth=2.0, linestyle='--'
         )
 
     _apply_plot_style(ax, title, xscale)
+
+    # Set axis limits if frequency range is specified
+    if freq_range is not None:
+        ax.set_xlim(freq_range[0] / 1e6, freq_range[1] / 1e6)
 
     handles, labels = ax.get_legend_handles_labels()
     if handles:
@@ -114,6 +130,7 @@ def export_pdf_report(
     pages: List[Tuple[str, List[Tuple[str, np.ndarray, np.ndarray]]]],
     limit_lines: List[Tuple[str, np.ndarray, np.ndarray, str, bool]],
     xscale: str = 'linear',
+    freq_range: Optional[Tuple[float, float]] = None,
 ):
     """Export a multi-page PDF report with one chart per pair combination.
 
@@ -123,6 +140,7 @@ def export_pdf_report(
                (label, freq_hz, next_db) tuples.
         limit_lines: Limit lines to overlay on each page.
         xscale: 'linear' or 'log'.
+        freq_range: Optional (start_hz, stop_hz) for display clipping.
     """
     filepath, _ = QFileDialog.getSaveFileName(
         parent, "导出 PDF 报告", "NEXT_Report.pdf",
@@ -135,7 +153,8 @@ def export_pdf_report(
         with PdfPages(filepath) as pdf:
             for page_title, curves in pages:
                 fig = _build_pair_figure(
-                    f"NEXT {page_title}", curves, limit_lines, xscale
+                    f"NEXT {page_title}", curves, limit_lines,
+                    xscale, freq_range
                 )
                 pdf.savefig(fig)
                 import matplotlib.pyplot as plt
