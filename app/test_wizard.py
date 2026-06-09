@@ -37,8 +37,9 @@ class Signals(QObject):
 class TestWizard(QWizard):
     """Guided wizard for automatic VNA testing."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, skip_config=False):
         super().__init__(parent)
+        self._skip_config = skip_config
         self.project: Optional[Project] = None
         self.vna = VNAController()
         self.signals = Signals()
@@ -47,10 +48,13 @@ class TestWizard(QWizard):
         # Config from UI
         self._visa_address = ""
         self._save_folder = ""
+        self._vna_local_path = "C:\\HPData"
         self._total_pairs = 8
         self._freq_start = 100e3
         self._freq_stop = 500e6
         self._sweep_points = 1001
+        self._ports_a = (1, 2)
+        self._ports_b = (3, 4)
 
         self._init_ui()
 
@@ -59,16 +63,19 @@ class TestWizard(QWizard):
         self.setMinimumSize(650, 500)
         self.setWizardStyle(QWizard.ModernStyle)
 
-        # Page 1: Configuration
+        # Always create all 3 pages (VNA logic depends on full wizard)
         self.addPage(self._create_config_page())
-
-        # Page 2: Testing
         self.addPage(self._create_test_page())
-
-        # Page 3: Complete
         self.addPage(self._create_complete_page())
 
-        self.button(QWizard.FinishButton).clicked.connect(self._on_finish)
+        if not self._skip_config:
+            # Config-only mode (Tools menu): save and close without testing
+            self.setWindowTitle("VNA 测试配置")
+            self.button(QWizard.FinishButton).setText("保存配置")
+            # Hide the step indicator (only 1 "page" is reachable)
+            self.setOption(QWizard.NoBackButtonOnStartPage)
+
+        self.accepted.connect(self._on_wizard_accepted)
         self.button(QWizard.CancelButton).clicked.connect(self._on_cancel)
 
     def _create_config_page(self) -> QWizardPage:
@@ -106,15 +113,34 @@ class TestWizard(QWizard):
         layout.addWidget(vna_group)
 
         # Save folder group
-        folder_group = QGroupBox("S4P 保存路径")
+        folder_group = QGroupBox("S4P 保存路径（VNA 共享路径）")
         folder_layout = QHBoxLayout(folder_group)
         self.folder_edit = QLineEdit()
-        self.folder_edit.setPlaceholderText("D:\\VNA_Data\\")
+        self.folder_edit.setPlaceholderText("\\\\100.0.0.1\\user")
+        self.folder_edit.setToolTip(
+            "VNA 网络共享路径。VNA 将 S4P 文件直接保存到此路径。\n"
+            "程序也从该路径读取文件进行分析。\n"
+            "例如: \\\\100.0.0.1\\user"
+        )
         self.browse_btn = QPushButton("浏览...")
         self.browse_btn.clicked.connect(self._browse_folder)
         folder_layout.addWidget(self.folder_edit)
         folder_layout.addWidget(self.browse_btn)
         layout.addWidget(folder_group)
+
+        # VNA local save path
+        vna_folder_group = QGroupBox("VNA 内部保存路径")
+        vna_folder_layout = QHBoxLayout(vna_folder_group)
+        self.vna_folder_edit = QLineEdit()
+        self.vna_folder_edit.setText("C:\\HPData")
+        self.vna_folder_edit.setToolTip(
+            "VNA 本地的保存路径（不是网络路径）。\n"
+            "VNA 在 C: 盘上共享 HPData 文件夹，SCPI 命令将文件保存到此路径。\n"
+            "必须与上面的共享路径对应。\n"
+            "例如: C:\\HPData"
+        )
+        vna_folder_layout.addWidget(self.vna_folder_edit)
+        layout.addWidget(vna_folder_group)
 
         # Test parameters group
         param_group = QGroupBox("测试参数")
@@ -125,6 +151,23 @@ class TestWizard(QWizard):
         self.pairs_spin.setMaximum(64)
         self.pairs_spin.setValue(8)
         param_layout.addRow("总对数:", self.pairs_spin)
+
+        # VNA port mapping
+        port_layout = QHBoxLayout()
+        self.port_a_combo = QComboBox()
+        self.port_b_combo = QComboBox()
+        for p1, p2 in [(1,2),(1,3),(1,4),(2,3),(2,4),(3,4)]:
+            label = f"{p1}-{p2}"
+            self.port_a_combo.addItem(label, (p1, p2))
+            self.port_b_combo.addItem(label, (p1, p2))
+        self.port_a_combo.setCurrentIndex(0)  # default 1-2
+        self.port_b_combo.setCurrentIndex(2)  # default 3-4
+        port_layout.addWidget(QLabel("线对 A 端口:"))
+        port_layout.addWidget(self.port_a_combo)
+        port_layout.addWidget(QLabel("线对 B 端口:"))
+        port_layout.addWidget(self.port_b_combo)
+        port_layout.addStretch()
+        param_layout.addRow("VNA 端口分配:", port_layout)
 
         freq_layout = QHBoxLayout()
         self.freq_start_spin = QDoubleSpinBox()
@@ -252,19 +295,17 @@ class TestWizard(QWizard):
             self.visa_combo.setCurrentIndex(0)
             self._test_vna_connection()
         else:
-            self.visa_combo.addItem("未检测到仪器，将使用模拟模式")
+            self.visa_combo.addItem("未检测到仪器")
             self.visa_combo.setCurrentIndex(0)
-            self.connect_status.setText("模拟模式")
-            self.connect_status.setStyleSheet("color: orange;")
-            self.vna.simulation_mode = True
-            self.vna.connected = True
-            self._append_log("未检测到 VNA 仪器，将使用模拟模式进行测试")
+            self.connect_status.setText("未检测到仪器")
+            self.connect_status.setStyleSheet("color: red;")
+            self._append_log("未检测到 VNA 仪器，请确认 Connection Expert 已配置")
 
     def _test_vna_connection(self):
         address = self.visa_combo.currentText().strip()
         if not address or "未检测到" in address:
-            self.connect_status.setText("模拟模式")
-            self.connect_status.setStyleSheet("color: orange;")
+            self.connect_status.setText("未连接")
+            self.connect_status.setStyleSheet("color: red;")
             return
 
         self.connect_btn.setEnabled(False)
@@ -279,11 +320,9 @@ class TestWizard(QWizard):
             self.connect_status.setStyleSheet("color: green; font-weight: bold;")
             self._append_log(f"VNA 连接成功: {self.vna.get_id()}")
         else:
-            self.connect_status.setText("⚠ 连接失败，使用模拟模式")
-            self.connect_status.setStyleSheet("color: orange;")
-            self.vna.simulation_mode = True
-            self.vna.connected = True
-            self._append_log("VNA 连接失败，切换到模拟模式")
+            self.connect_status.setText("✗ 连接失败")
+            self.connect_status.setStyleSheet("color: red; font-weight: bold;")
+            self._append_log("VNA 连接失败，请检查仪器地址和连接状态")
         self.connect_btn.setEnabled(True)
 
     def _browse_folder(self):
@@ -297,6 +336,12 @@ class TestWizard(QWizard):
         self.pairs_spin.setValue(project.total_pairs)
         self.freq_start_spin.setValue(project.display_freq_start / 1e9)
         self.freq_stop_spin.setValue(project.display_freq_stop / 1e9)
+        # Restore port config using direct index lookup
+        port_options = [(1,2),(1,3),(1,4),(2,3),(2,4),(3,4)]
+        if project.port_group_a in port_options:
+            self.port_a_combo.setCurrentIndex(port_options.index(project.port_group_a))
+        if project.port_group_b in port_options:
+            self.port_b_combo.setCurrentIndex(port_options.index(project.port_group_b))
 
     def set_save_folder(self, folder: str):
         """Set the default save folder."""
@@ -306,38 +351,59 @@ class TestWizard(QWizard):
         """Read config values from UI."""
         self._visa_address = self.visa_combo.currentText().strip()
         self._save_folder = self.folder_edit.text().strip()
+        self._vna_local_path = self.vna_folder_edit.text().strip()
         self._total_pairs = self.pairs_spin.value()
         self._freq_start = int(self.freq_start_spin.value() * 1e9)
         self._freq_stop = int(self.freq_stop_spin.value() * 1e9)
         self._sweep_points = self.points_spin.value()
+        self._ports_a = self.port_a_combo.currentData()
+        self._ports_b = self.port_b_combo.currentData()
 
     def validateCurrentPage(self):
         """Validate before moving to next page."""
+        if self._skip_config:
+            return True
         if self.currentPage().title() == "测试配置":
             self._collect_config()
-            if not self._save_folder:
-                QMessageBox.warning(self, "提示", "请设置 S4P 保存路径")
+            # Save port groups immediately
+            if self.project:
+                self.project.port_group_a = self._ports_a
+                self.project.port_group_b = self._ports_b
+            # Check port groups don't overlap
+            if set(self._ports_a) & set(self._ports_b):
+                QMessageBox.warning(self, "错误", "线对 A 和线对 B 的 VNA 端口不能重叠")
                 return False
-            if not os.path.exists(self._save_folder):
-                try:
-                    os.makedirs(self._save_folder)
-                except Exception as e:
-                    QMessageBox.warning(self, "错误", f"无法创建保存路径:\n{str(e)}")
-                    return False
             return True
         return super().validateCurrentPage()
+
+    def nextId(self):
+        """Override page order."""
+        curr = self.currentId()
+        if self._skip_config and curr == 0:
+            return 1  # skip config page (0) -> test page (1)
+        if not self._skip_config:
+            return -1  # config-only: no next page, Finish button shown instead
+        return super().nextId()
 
     def initializePage(self, page_id: int):
         """Called when a page becomes visible."""
         title = self.page(page_id).title()
         if title == "测试配置":
-            # Auto-detect VNA instruments when config page opens
-            QTimer.singleShot(200, self._refresh_visa_resources)
+            if self._skip_config:
+                QTimer.singleShot(0, self._on_skip_validate)
+            else:
+                QTimer.singleShot(200, self._refresh_visa_resources)
         elif title == "自动测试":
             self._start_test_session()
 
+    def _on_skip_validate(self):
+        """Skip validation on config page when in quick test mode."""
+        self.next()
+
     def _start_test_session(self):
         """Begin the test session."""
+        # Set VNA local save path on controller
+        self.vna.vna_local_path = self._vna_local_path
         # Build combination list
         self._combinations = []
         for i in range(1, self._total_pairs + 1):
@@ -360,9 +426,11 @@ class TestWizard(QWizard):
         total = len(self._combinations)
 
         self.progress_bar.setValue(self._current_index)
+        p1, p2 = self._ports_a
+        p3, p4 = self._ports_b
         self.pair_label.setText(f"线对 {pa}-{pb}")
         self.instruction_label.setText(
-            f"请将端口 1-2 连接到线对 {pa}，端口 3-4 连接到线对 {pb}\n"
+            f"请将 VNA 端口 {p1},{p2} 连接到线对 {pa}，端口 {p3},{p4} 连接到线对 {pb}\n"
             f"连接完成后，点击「开始测试」"
         )
         self.status_label.setText(f"进度: {self._current_index + 1} / {total}")
@@ -384,7 +452,6 @@ class TestWizard(QWizard):
         QApplication.processEvents()
 
         # Generate filename
-        safe_folder = self._save_folder.replace('/', '\\')
         filename = f"pair_{pa}_{pb}.s4p"
         filepath = os.path.join(self._save_folder, filename)
 
@@ -398,7 +465,8 @@ class TestWizard(QWizard):
 
     def _run_measurement_thread(self, pa: int, pb: int, filepath: str):
         """Run measurement in background thread."""
-        success = self.vna.take_measurement(
+        self.signals.progress_updated.emit(0, 1, "正在触发 VNA 测量...")
+        result_path = self.vna.take_measurement(
             save_path=filepath,
             freq_start_hz=self._freq_start,
             freq_stop_hz=self._freq_stop,
@@ -407,15 +475,9 @@ class TestWizard(QWizard):
                 self.signals.progress_updated.emit(c, t, m)
         )
 
-        if not success and self.vna.simulation_mode:
-            # Wait for simulated file
-            time.sleep(0.5)
-
-        # Verify file exists
-        if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-            self.signals.test_completed.emit(pa, pb, True, filepath)
-        elif self.vna.simulation_mode:
-            self.signals.test_completed.emit(pa, pb, True, filepath)
+        if result_path:
+            # result_path is the UNC path on VNA share — read directly
+            self.signals.test_completed.emit(pa, pb, True, result_path)
         else:
             self.signals.test_completed.emit(pa, pb, False, filepath)
 
@@ -431,7 +493,9 @@ class TestWizard(QWizard):
                     pair_a=pa,
                     pair_b=pb,
                     frequencies=frequencies,
-                    s_params=s_params
+                    s_params=s_params,
+                    ports_a=self._ports_a,
+                    ports_b=self._ports_b,
                 )
                 if self.project:
                     self.project.add_measurement(meas)
@@ -500,14 +564,14 @@ class TestWizard(QWizard):
             summary += f"{os.path.basename(fp) if fp else '跳过'}\n"
         self.result_text.setText(summary)
 
-    def _on_finish(self):
-        """Accept and pass results back."""
-        # Update project settings
+    def _on_wizard_accepted(self):
+        """Save settings when wizard is accepted (Finish clicked + validation OK)."""
         if self.project:
             self.project.total_pairs = self._total_pairs
             self.project.display_freq_start = self._freq_start
             self.project.display_freq_stop = self._freq_stop
-        self.accept()
+            self.project.port_group_a = self._ports_a
+            self.project.port_group_b = self._ports_b
 
     def _on_cancel(self):
         self.reject()

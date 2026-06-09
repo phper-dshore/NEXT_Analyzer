@@ -58,6 +58,8 @@ class PairConfigWidget(QWidget):
 
         self.checkbox_container = QWidget()
         self.checkbox_layout = QGridLayout(self.checkbox_container)
+        self.checkbox_layout.setSpacing(2)
+        self.checkbox_layout.setContentsMargins(2, 2, 2, 2)
         scroll.setWidget(self.checkbox_container)
         layout.addWidget(scroll)
 

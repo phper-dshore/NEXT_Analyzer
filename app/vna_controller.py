@@ -1,5 +1,5 @@
 """
-VNA controller module for controlling Keysight VNA via VISA/SCPI.
+VNA controller module for R&S ZNA67 via VISA/SCPI.
 
 Requires:
 - Keysight VISA (installed with Keysight Connection Expert) on Windows
@@ -15,14 +15,14 @@ from typing import Optional, Callable
 
 logger = logging.getLogger(__name__)
 
-# SCPI commands for Keysight PNA/ZNA series
+# SCPI commands for Rohde & Schwarz ZNA67
 SCPI_INIT = "*IDN?"
 SCPI_TRIGGER = "INIT:IMM;*WAI"
 SCPI_SET_FREQ_START = "SENS:FREQ:STAR {:.0f}"
 SCPI_SET_FREQ_STOP = "SENS:FREQ:STOP {:.0f}"
 SCPI_SET_POINTS = "SENS:SWE:POIN {:d}"
-SCPI_SAVE_S4P = 'MMEM:STOR:SNP "{}", 4'
-SCPI_SAVE_S4P_AUTO = 'MMEM:STOR:SNP:AUTO "{}", 4'
+# R&S ZNA format: :MMEMory:STORe:TRACe:PORTS <trace>, '<path>', COMPlex, <ports...>
+SCPI_SAVE_S4P = ':MMEM:STOR:TRAC:PORT 1, \'{}\', COMP, 1,2,3,4'
 
 # Export format options
 SCPI_EXPORT_FORMAT = 'MMEM:STOR:SNP:FORM {:s}'  # RI, DB, MA
@@ -36,7 +36,7 @@ except ImportError:
 
 
 class VNAController:
-    """Controller for Keysight VNA via VISA/SCPI.
+    """Controller for R&S ZNA67 VNA via VISA/SCPI.
 
     Falls back to simulation mode when VISA is not available.
     """
@@ -51,6 +51,8 @@ class VNAController:
         self._sim_freq_start = 100e3
         self._sim_freq_stop = 500e6
         self._sim_points = 201
+        # VNA local save path (e.g. C:\\HPData\\) — set by wizard config
+        self.vna_local_path = "C:\\HPData\\"
 
     def list_resources(self) -> list:
         """List available VISA resources."""
@@ -79,7 +81,7 @@ class VNAController:
         if not _HAS_VISA:
             self.simulation_mode = True
             self.connected = True
-            self._id = "Simulated Keysight VNA (ZNA67)"
+            self._id = "Simulated Rohde & Schwarz ZNA67"
             logger.info(f"VISA not available, running in simulation mode")
             return True
 
@@ -95,6 +97,11 @@ class VNAController:
             self.connected = True
             self.simulation_mode = False
             logger.info(f"Connected to VNA: {self._id}")
+
+            # Auto-detect if ZNA67: use :MMEM:STOR:TRAC:PORT command
+            if 'ZNA' in self._id.upper():
+                logger.info("Detected R&S ZNA series VNA")
+
             return True
         except Exception as e:
             logger.error(f"Failed to connect to VNA: {e}")
@@ -146,59 +153,75 @@ class VNAController:
         self._sim_freq_stop = freq_stop_hz
         self._sim_points = points
 
-    def trigger_and_save(self, save_path: str) -> bool:
-        """Trigger a measurement and save to S4P file.
+    def trigger_and_save(self, save_path: str) -> str:
+        """Trigger a measurement and save S4P file.
+
+        The VNA writes the S4P file via SCPI to its local drive,
+        then the PC reads the file from the UNC network share path.
 
         Args:
-            save_path: Full path for the S4P file to save.
+            save_path: UNC path for the S4P file to read from
+                       (e.g. \\\\100.1.1.1\\HPData\\pair_1_2.s4p).
 
         Returns:
-            True if measurement and save completed.
+            Path to the saved S4P file on success, or empty string on failure.
         """
         if self.simulation_mode:
             logger.info(f"SIM: Trigger measurement and save to {save_path}")
-            # In simulation, create a placeholder file
             self._create_simulated_s4p(
                 save_path,
                 freq_start_hz=self._sim_freq_start,
                 freq_stop_hz=self._sim_freq_stop,
                 points=self._sim_points
             )
-            return True
+            return save_path
 
         if not self.connected:
             raise RuntimeError("VNA not connected")
 
         try:
+            # Build VNA local path from UNC path
+            # UNC: \\100.1.1.1\HPData\pair_1_2.s4p
+            # VNA local: C:\HPData\pair_1_2.s4p
+            filename = os.path.basename(save_path)
+            vna_filepath = os.path.join(self.vna_local_path, filename)
+
             # Trigger single sweep
             self._write(SCPI_TRIGGER)
 
-            # Save as S4P
-            s4p_path = save_path.replace('/', '\\')  # Windows path
-            self._write(SCPI_SAVE_S4P.format(s4p_path))
+            # Save S4P on VNA using R&S ZNA command with local path
+            logger.info(f"VNA save command: {SCPI_SAVE_S4P.format(vna_filepath)}")
+            self._write(SCPI_SAVE_S4P.format(vna_filepath))
 
-            # Wait briefly for file to be written
-            time.sleep(0.5)
-            return os.path.exists(save_path)
+            # Wait for file to be written
+            time.sleep(3)
+
+            # Verify file exists on the UNC share (VNA writes to its local
+            # C: drive, which is shared as a network share)
+            if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
+                return save_path
+
+            logger.error(f"S4P file not found after save: {save_path}")
+            return ""
         except Exception as e:
             logger.error(f"Failed to trigger and save: {e}")
-            return False
+            return ""
 
     def take_measurement(self, save_path: str,
                          freq_start_hz: float, freq_stop_hz: float,
                          points: int = 1001,
-                         progress_callback: Optional[Callable] = None) -> bool:
-        """Full measurement sequence: configure, trigger, save.
+                         progress_callback: Optional[Callable] = None) -> str:
+        """Full measurement sequence: configure, trigger, get file path.
 
         Args:
-            save_path: Full path for S4P file.
+            save_path: Full UNC path for the S4P file (e.g. \\\\100.1.1.1\\HPData\\pair.s4p).
             freq_start_hz: Start frequency in Hz.
             freq_stop_hz: Stop frequency in Hz.
             points: Number of sweep points.
             progress_callback: Optional callback(current, total, message).
 
         Returns:
-            True if successful.
+            Path to the S4P file on success, empty string on failure.
         """
         try:
             if progress_callback:
@@ -209,22 +232,33 @@ class VNAController:
             if progress_callback:
                 progress_callback(1, 3, "触发测量...")
 
-            result = self.trigger_and_save(save_path)
+            if progress_callback:
+                progress_callback(2, 3, "保存 S4P 文件...")
+
+            result_path = self.trigger_and_save(save_path)
 
             if progress_callback:
-                progress_callback(3, 3, "完成" if result else "失败")
+                progress_callback(3, 3, "完成" if result_path else "失败")
 
-            return result
+            return result_path
         except Exception as e:
             logger.error(f"Measurement failed: {e}")
             if progress_callback:
                 progress_callback(0, 3, f"错误: {e}")
-            return False
+            return ""
 
     def _write(self, command: str):
         """Write a SCPI command to the VNA."""
         if self.instrument:
+            logger.debug(f"SCPI write: {command}")
             self.instrument.write(command)
+
+    def _query(self, command: str) -> str:
+        """Write a SCPI command and read the response."""
+        if self.instrument:
+            logger.debug(f"SCPI query: {command}")
+            return self.instrument.query(command)
+        return ""
 
     def _create_simulated_s4p(self, filepath: str,
                               freq_start_hz: float = 100e3,
@@ -262,7 +296,6 @@ class VNAController:
                 vals = [freq, s11_db, s11_ang]
 
                 # Generate 16 S-parameters in standard Touchstone order
-                # For simplicity, fill with reasonable values
                 idx = 0
                 for col in range(4):  # input port
                     for row in range(4):  # output port

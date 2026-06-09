@@ -1,15 +1,21 @@
 """
 Settings persistence manager.
-Saves/loads application configuration to a JSON file in the app directory.
+Saves/loads application configuration to a JSON file next to the executable.
 Settings survive application restarts.
 """
 
 import json
 import os
+import sys
 from typing import List, Optional
 from app.data_model import LimitLine, Project
 
-SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "settings.json")
+if getattr(sys, 'frozen', False):
+    # PyInstaller bundle: save next to the .exe
+    SETTINGS_FILE = os.path.join(os.path.dirname(sys.executable), "settings.json")
+else:
+    # Development: save at project root
+    SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "settings.json")
 
 
 def _default_settings() -> dict:
@@ -19,10 +25,17 @@ def _default_settings() -> dict:
         "display_freq_stop_hz": 500000000.0,
         "visa_address": "",
         "save_folder": "",
+        "vna_local_path": "C:\\HPData",
         "sweep_points": 1001,
-        "power_sum_enabled": True,
+        "sdd21_enabled": True,
+        "power_sum_enabled": False,
         "worst_case_enabled": False,
+        "port_group_a": [1, 2],
+        "port_group_b": [3, 4],
         "limit_lines": [],
+        "report_number": "",
+        "cable_length": 4.0,
+        "device_model": "",
     }
 
 
@@ -54,6 +67,10 @@ def settings_to_project(settings: dict, project: Project):
     project.total_pairs = settings.get("total_pairs", 8)
     project.display_freq_start = settings.get("display_freq_start_hz", 100000.0)
     project.display_freq_stop = settings.get("display_freq_stop_hz", 500000000.0)
+    project.port_group_a = tuple(settings.get("port_group_a", [1, 2]))
+    project.port_group_b = tuple(settings.get("port_group_b", [3, 4]))
+    project.report_number = settings.get("report_number", "")
+    project.device_model = settings.get("device_model", "")
     project.limit_lines = []
     for ll in settings.get("limit_lines", []):
         project.limit_lines.append(LimitLine(
@@ -70,6 +87,10 @@ def project_to_settings(project: Project) -> dict:
         "total_pairs": project.total_pairs,
         "display_freq_start_hz": project.display_freq_start,
         "display_freq_stop_hz": project.display_freq_stop,
+        "port_group_a": list(project.port_group_a),
+        "port_group_b": list(project.port_group_b),
+        "report_number": project.report_number,
+        "device_model": project.device_model,
         "limit_lines": [
             {
                 "name": ll.name,

@@ -213,7 +213,7 @@ class _LimitLineEditDialog(QDialog):
         points_layout.addLayout(btn_row)
 
         self.points_table = QTableWidget(0, 2)
-        self.points_table.setHorizontalHeaderLabels(["频率 (MHz)", "幅度 (dB)"])
+        self.points_table.setHorizontalHeaderLabels(["频率 (GHz)", "幅度 (dB)"])
         self.points_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         points_layout.addWidget(self.points_table)
 
@@ -230,10 +230,10 @@ class _LimitLineEditDialog(QDialog):
         btn_layout.addWidget(cancel_btn)
         layout.addLayout(btn_layout)
 
-        # Load existing points
+        # Load existing points (convert Hz to GHz)
         if line:
-            for freq, amp in line.points:
-                self._add_point_row(freq, amp)
+            for freq_hz, amp in line.points:
+                self._add_point_row(freq_hz / 1e9, amp)
 
     def _pick_color(self):
         from PyQt5.QtGui import QColor
@@ -243,16 +243,16 @@ class _LimitLineEditDialog(QDialog):
             self.color_btn.setStyleSheet(f"background-color: {self._color}; min-width: 40px;")
 
     def _add_point(self):
-        self._add_point_row(0, -80)
+        self._add_point_row(0.01, -30)
 
-    def _add_point_row(self, freq=0.0, amp=-80.0):
+    def _add_point_row(self, freq=0.01, amp=-30.0):
         row = self.points_table.rowCount()
         self.points_table.insertRow(row)
 
         freq_spin = QDoubleSpinBox()
-        freq_spin.setDecimals(2)
-        freq_spin.setRange(0.01, 100000)
-        freq_spin.setSuffix(" MHz")
+        freq_spin.setDecimals(3)
+        freq_spin.setRange(0.001, 100)
+        freq_spin.setSuffix(" GHz")
         freq_spin.setValue(freq)
         self.points_table.setCellWidget(row, 0, freq_spin)
 
@@ -287,9 +287,9 @@ class _LimitLineEditDialog(QDialog):
             freq_spin = self.points_table.cellWidget(row, 0)
             amp_spin = self.points_table.cellWidget(row, 1)
             if freq_spin and amp_spin:
-                freq_mhz = freq_spin.value()
+                freq_ghz = freq_spin.value()
                 amp_db = amp_spin.value()
-                points.append((freq_mhz * 1e6, amp_db))  # Store in Hz
+                points.append((freq_ghz * 1e9, amp_db))  # Store in Hz
         # Sort by frequency
         points.sort(key=lambda x: x[0])
         return name, self._color, points

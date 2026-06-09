@@ -189,7 +189,7 @@ class PlotWidget(QWidget):
 
             freq_ghz = clipped_freq / 1e9
             self.axes.plot(
-                freq_mhz, clipped_val,
+                freq_ghz, clipped_val,
                 label=line['name'], color=line['color'],
                 linewidth=2.0, linestyle='--'
             )
