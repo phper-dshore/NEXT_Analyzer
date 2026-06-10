@@ -5,13 +5,40 @@ with cover page, PASS/FAIL summary table, and per-pair charts.
 """
 
 import csv
+import unicodedata
 from datetime import datetime
 from typing import List, Tuple, Optional
 from PyQt5.QtWidgets import QFileDialog, QMessageBox, QWidget
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 import numpy as np
+from app.data_model import clip_interpolated_line
+
+
+def _wrap_cover_value(value: str, max_width: int = 46) -> str:
+    """Wrap cover-page values using approximate rendered character widths."""
+    lines = []
+    current = []
+    current_width = 0
+    for char in str(value) or "-":
+        char_width = 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+        if current and current_width + char_width > max_width:
+            lines.append("".join(current).rstrip())
+            current = []
+            current_width = 0
+        current.append(char)
+        current_width += char_width
+    if current:
+        lines.append("".join(current).rstrip())
+    if len(lines) >= 2 and len(lines[-1]) < 8:
+        combined = lines[-2] + lines[-1]
+        split_at = combined.rfind(" ", 0, max(1, len(combined) - 8))
+        if split_at > 0:
+            lines[-2] = combined[:split_at].rstrip()
+            lines[-1] = combined[split_at + 1:].lstrip()
+    return "\n".join(lines)
 
 
 def _apply_plot_style(axes, title: str, xscale: str = 'linear'):
@@ -62,12 +89,14 @@ def _build_pair_figure(
     for name, freqs, values, color, visible in limit_lines:
         if not visible:
             continue
-        mask = (freqs >= fmin) & (freqs <= fmax)
-        if not np.any(mask):
+        clipped_freq, clipped_values = clip_interpolated_line(
+            freqs, values, fmin, fmax
+        )
+        if not len(clipped_freq):
             continue
-        freq_ghz = freqs[mask] / 1e9
+        freq_ghz = clipped_freq / 1e9
         ax.plot(
-            freq_ghz, values[mask],
+            freq_ghz, clipped_values,
             label=name, color=color,
             linewidth=2.0, linestyle='--'
         )
@@ -112,58 +141,88 @@ def _create_cover_page(tester: str, date_str: str, total_pairs: int,
         A matplotlib Figure for the cover page.
     """
     fig = Figure(figsize=(8.5, 11), dpi=150)
-    ax = fig.add_subplot(111)
-    ax.axis('off')
-    ax.set_position([0, 0, 1, 1])  # Axes fills entire figure — one unified coordinate space
+    # All cover elements use figure coordinates so the layout cannot be
+    # shifted by axes autoscaling or text content.
+    fig.text(0.5, 0.88, "高速线测试分析报告", fontsize=28, fontweight='bold',
+             ha='center', va='center', color='#1a1a2e')
+    fig.text(0.5, 0.82, "NEXT 近端串音测试报告", fontsize=18,
+             ha='center', va='center', color='#444444')
 
-    # Title block — all use ax.text with ax.transAxes (= figure coords now)
-    ax.text(0.5, 0.88, "高速线测试分析报告", fontsize=28, fontweight='bold',
-            ha='center', va='center', color='#1a1a2e', transform=ax.transAxes)
-    ax.text(0.5, 0.82, "NEXT 近端串音测试报告", fontsize=18,
-            ha='center', va='center', color='#444444', transform=ax.transAxes)
+    for x1, x2, y, width in (
+        (0.15, 0.85, 0.755, 2.0),
+        (0.20, 0.80, 0.742, 0.5),
+    ):
+        fig.add_artist(Line2D(
+            [x1, x2], [y, y], transform=fig.transFigure,
+            color='#0078d4', linewidth=width
+        ))
 
-    # Decorative line
-    ax.axhline(y=0.75, xmin=0.15, xmax=0.85, color='#0078d4', linewidth=2)
-    ax.axhline(y=0.735, xmin=0.2, xmax=0.8, color='#0078d4', linewidth=0.5)
-
-    # Info section — left-aligned, va='top' anchors the first line here
     cl = f"{cable_length:.1f}" if cable_length == int(cable_length) else f"{cable_length:.1f}"
-    info_lines = [
-        f"报告编号:  {report_number}",
-        f"测试设备:  {device_model}",
-        f"测试员:    {tester}",
-        f"测试日期:  {date_str}",
-        f"总线对数:  {total_pairs}",
-        f"测试线长:  {cl} M",
-        f"测试组合:  {pair_count} 对",
+    info_rows = [
+        ("报告编号", report_number),
+        ("测试设备", device_model),
+        ("测试员", tester),
+        ("测试日期", date_str),
+        ("总线对数", str(total_pairs)),
+        ("测试线长", f"{cl} M"),
+        ("测试组合", f"{pair_count} 对"),
     ]
     if limit_line_names:
-        info_lines.append(f"判定标准:  {', '.join(limit_line_names)}")
+        info_rows.append(("判定标准", ', '.join(limit_line_names)))
 
-    info_text = "\n\n".join(info_lines)
-    ax.text(0.12, 0.62, info_text, fontsize=14, ha='left', va='top',
-            linespacing=1.8, color='#333333', transform=ax.transAxes)
+    wrapped_rows = [
+        (label, _wrap_cover_value(value))
+        for label, value in info_rows
+    ]
+    total_text_lines = sum(value.count("\n") + 1 for _, value in wrapped_rows)
+    available_height = 0.54
+    line_step = min(
+        0.032,
+        available_height / (total_text_lines + len(wrapped_rows) * 0.65),
+    )
+    row_gap = line_step * 0.65
+    text_linespacing = max(1.05, min(1.35, line_step / 0.024))
+
+    y = 0.675
+    for label, wrapped_value in wrapped_rows:
+        line_count = wrapped_value.count("\n") + 1
+        fig.text(0.15, y, f"{label}:", fontsize=13, fontweight='bold',
+                 ha='left', va='top', color='#555555')
+        fig.text(0.31, y, wrapped_value, fontsize=13,
+                 ha='left', va='top', color='#333333',
+                 linespacing=text_linespacing)
+        y -= line_count * line_step + row_gap
 
     # Footer
-    ax.text(0.5, 0.04, "— 本报告由高速线网分析仪自动生成 —",
-            fontsize=10, ha='center', va='bottom', color='#888888', transform=ax.transAxes)
+    fig.text(0.5, 0.04, "— 本报告由高速线网分析仪自动生成 —",
+             fontsize=10, ha='center', va='bottom', color='#888888')
 
     return fig
 
 
-def _evaluate_pair(curves, limit_freqs, limit_values):
+def _evaluate_pair(curves, limit_freqs, limit_values,
+                   freq_range: Optional[Tuple[float, float]] = None):
     """Evaluate a pair against the limit line.
 
     Args:
         curves: List of (label, freq_hz, next_db) for this pair.
         limit_freqs: Limit line frequency array in Hz.
         limit_values: Limit line value array in dB.
+        freq_range: Optional (start_hz, stop_hz) for evaluation clipping.
 
     Returns:
         (pass_bool, worst_margin, worst_freq_hz, worst_next_db, worst_label) or
         (None, None, None, None, None) if evaluation not possible.
     """
     if not curves or len(limit_freqs) < 2:
+        return None, None, None, None, None
+
+    order = np.argsort(limit_freqs)
+    limit_freqs = np.asarray(limit_freqs)[order]
+    limit_values = np.asarray(limit_values)[order]
+    eval_min = max(freq_range[0], limit_freqs[0]) if freq_range else limit_freqs[0]
+    eval_max = min(freq_range[1], limit_freqs[-1]) if freq_range else limit_freqs[-1]
+    if eval_min > eval_max:
         return None, None, None, None, None
 
     overall_pass = True
@@ -173,6 +232,11 @@ def _evaluate_pair(curves, limit_freqs, limit_values):
     overall_worst_label = ""
 
     for label, freq, next_db in curves:
+        mask = (freq >= eval_min) & (freq <= eval_max)
+        if not np.any(mask):
+            continue
+        freq = freq[mask]
+        next_db = next_db[mask]
         # Interpolate limit at measurement frequencies
         limit_interp = np.interp(freq, limit_freqs, limit_values)
         # Margin = limit - NEXT (positive = pass, negative = fail)
@@ -189,16 +253,25 @@ def _evaluate_pair(curves, limit_freqs, limit_values):
         if min_margin < 0:
             overall_pass = False
 
+    if overall_worst_margin == float('inf'):
+        return None, None, None, None, None
+
     return overall_pass, overall_worst_margin, overall_worst_freq, overall_worst_next, overall_worst_label
 
 
-def _create_summary_page(pages, limit_lines, tester) -> Figure:
+def _create_summary_page(pages, limit_lines, tester,
+                         freq_range: Optional[Tuple[float, float]] = None,
+                         summary_page_index: int = 1,
+                         summary_page_count: int = 1) -> Figure:
     """Create a summary table page with PASS/FAIL results.
 
     Args:
         pages: List of (page_title, curves) pairs.
         limit_lines: List of visible limit lines for evaluation.
         tester: Tester name.
+        freq_range: Optional (start_hz, stop_hz) for evaluation clipping.
+        summary_page_index: Current summary-page number.
+        summary_page_count: Total number of summary pages.
 
     Returns:
         A matplotlib Figure with the summary table.
@@ -208,7 +281,10 @@ def _create_summary_page(pages, limit_lines, tester) -> Figure:
     ax.axis('off')
 
     # Title
-    ax.text(0.5, 0.96, "综合测试结果", fontsize=20, fontweight='bold',
+    title = "综合测试结果"
+    if summary_page_count > 1:
+        title += f" ({summary_page_index}/{summary_page_count})"
+    ax.text(0.5, 0.96, title, fontsize=20, fontweight='bold',
             ha='center', va='center', color='#1a1a2e')
 
     # Find the first visible limit line for evaluation
@@ -229,7 +305,7 @@ def _create_summary_page(pages, limit_lines, tester) -> Figure:
         pair_name = page_title.replace("线对 ", "")
         if limit_freqs is not None:
             passed, worst_margin, worst_freq, worst_next, worst_label = _evaluate_pair(
-                curves, limit_freqs, limit_values)
+                curves, limit_freqs, limit_values, freq_range)
             if passed is None:
                 result = "—"
                 worst_freq_str = "—"
@@ -385,12 +461,22 @@ def export_pdf_report(
             pdf.savefig(cover)
             plt.close(cover)
 
-            # 2. Summary page
-            summary = _create_summary_page(pages, limit_lines, tester)
-            _add_page_number(summary, page_num)
-            page_num += 1
-            pdf.savefig(summary)
-            plt.close(summary)
+            # 2. Summary pages. Keep row height readable for large pair counts.
+            rows_per_summary_page = 28
+            summary_chunks = [
+                pages[i:i + rows_per_summary_page]
+                for i in range(0, len(pages), rows_per_summary_page)
+            ] or [[]]
+            for index, chunk in enumerate(summary_chunks, start=1):
+                summary = _create_summary_page(
+                    chunk, limit_lines, tester, freq_range,
+                    summary_page_index=index,
+                    summary_page_count=len(summary_chunks),
+                )
+                _add_page_number(summary, page_num)
+                page_num += 1
+                pdf.savefig(summary)
+                plt.close(summary)
 
             # 3. Per-pair chart pages
             for page_title, curves in pages:
@@ -406,7 +492,8 @@ def export_pdf_report(
         QMessageBox.information(
             parent, "导出成功",
             f"PDF 报告已保存到:\n{filepath}\n"
-            f"共 {len(pages) + 2} 页（封面 + 汇总 + {len(pages)} 线对图表）"
+            f"共 {len(pages) + len(summary_chunks) + 1} 页"
+            f"（封面 + {len(summary_chunks)} 页汇总 + {len(pages)} 线对图表）"
         )
     except Exception as e:
         QMessageBox.critical(parent, "导出失败", f"导出 PDF 时出错:\n{str(e)}")

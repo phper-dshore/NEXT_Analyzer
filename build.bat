@@ -7,7 +7,7 @@ echo   高速线网分析仪 - 打包工具
 echo ====================================
 echo.
 echo 步骤 1: 安装依赖...
-pip install PyQt5 matplotlib numpy pyinstaller
+pip install -r requirements.txt
 if errorlevel 1 (
     echo 安装依赖失败，请确保 Python 已安装
     pause

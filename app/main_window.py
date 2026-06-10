@@ -325,18 +325,29 @@ class MainWindow(QMainWindow):
     def _update_freq_label(self):
         s = self.freq_start_spin.value()
         e = self.freq_stop_spin.value()
-        self.freq_range_label.setText(f"{s:.4f} - {e:.4f} GHz")
+        if s >= e:
+            self.freq_range_label.setText("起始频率必须小于终止频率")
+            self.freq_range_label.setStyleSheet("color: red;")
+        else:
+            self.freq_range_label.setText(f"{s:.4f} - {e:.4f} GHz")
+            self.freq_range_label.setStyleSheet("color: #888;")
 
     def _get_display_freq_range(self):
         """Get display frequency range in Hz."""
-        return self.freq_start_spin.value() * 1e9, self.freq_stop_spin.value() * 1e9
+        start = self.freq_start_spin.value() * 1e9
+        stop = self.freq_stop_spin.value() * 1e9
+        if start >= stop:
+            return self.project.display_freq_start, self.project.display_freq_stop
+        return start, stop
 
     def _on_freq_range_changed(self):
         s = self.freq_start_spin.value() * 1e9
         e = self.freq_stop_spin.value() * 1e9
+        self._update_freq_label()
+        if s >= e:
+            return
         self.project.display_freq_start = s
         self.project.display_freq_stop = e
-        self._update_freq_label()
         self._rebuild_tabs()
 
     def _show_empty_tab(self):
@@ -359,15 +370,19 @@ class MainWindow(QMainWindow):
         if meas is None:
             return []
         curves = []
+        f_start, f_stop = self._get_display_freq_range()
         if self.sdd21_cb.isChecked():
-            next_sdd21 = self.project.compute_next(meas, 'sdd21')
-            curves.append((f"{pa}-{pb} SDD21", meas.frequencies, next_sdd21))
+            freq, data = self.project.compute_next_in_range(meas, f_start, f_stop, 'sdd21')
+            if len(freq):
+                curves.append((f"{pa}-{pb} SDD21", freq, data))
         if self.power_sum_cb.isChecked():
-            next_ps = self.project.compute_next(meas, 'power_sum')
-            curves.append((f"{pa}-{pb} 功率和", meas.frequencies, next_ps))
+            freq, data = self.project.compute_next_in_range(meas, f_start, f_stop, 'power_sum')
+            if len(freq):
+                curves.append((f"{pa}-{pb} 功率和", freq, data))
         if self.worst_case_cb.isChecked():
-            next_wc = self.project.compute_next(meas, 'worst_case')
-            curves.append((f"{pa}-{pb} 最差值", meas.frequencies, next_wc))
+            freq, data = self.project.compute_next_in_range(meas, f_start, f_stop, 'worst_case')
+            if len(freq):
+                curves.append((f"{pa}-{pb} 最差值", freq, data))
         return curves
 
     def _get_limit_line_data(self):
@@ -424,7 +439,16 @@ class MainWindow(QMainWindow):
                     "请填写 VNA 地址和 S4P 保存路径后重试")
                 return
 
-        # Confirm clearing existing measurements
+        # Confirm the VNA is reachable before touching existing data.
+        connected = self.vna.connect(visa_addr)
+        if not connected:
+            QMessageBox.warning(self, "连接失败",
+                "无法连接到 VNA，请检查仪器状态\n"
+                "或重新打开配置向导进行设置")
+            self._update_vna_status()
+            return
+
+        # Confirm clearing existing measurements only after the VNA is connected.
         if self.project.measurements:
             reply = QMessageBox.question(
                 self, "确认清空",
@@ -435,20 +459,9 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.Yes:
                 return
 
-        # Clear existing measurements
         self.project.measurements.clear()
         self._refresh_file_list()
-        loaded_combos = set()
-        self.pair_config.set_loaded_combos(loaded_combos)
-
-        # Connect to VNA (reuse persistent connection)
-        connected = self.vna.connect(visa_addr)
-        if not connected:
-            QMessageBox.warning(self, "连接失败",
-                "无法连接到 VNA，请检查仪器状态\n"
-                "或重新打开配置向导进行设置")
-            self._update_vna_status()
-            return
+        self.pair_config.set_loaded_combos(set())
 
         # Run wizard with pre-configured settings, skip config page
         wizard = TestWizard(self, skip_config=True)
@@ -786,21 +799,41 @@ class MainWindow(QMainWindow):
             return
         curves = []
         reference_freq = None
+        f_start, f_stop = self._get_display_freq_range()
         for pa, pb in selected:
             meas = self.project.get_measurement_for_pairs(pa, pb)
             if meas is None:
                 continue
+            measurement_freq = None
             if self.sdd21_cb.isChecked():
-                curves.append((f"线对{pa}-{pb}_SDD21",
-                               self.project.compute_next(meas, 'sdd21')))
+                freq, data = self.project.compute_next_in_range(meas, f_start, f_stop, 'sdd21')
+                if len(freq):
+                    measurement_freq = freq
+                    curves.append((f"线对{pa}-{pb}_SDD21", data))
             if self.power_sum_cb.isChecked():
-                curves.append((f"线对{pa}-{pb}_功率和",
-                               self.project.compute_next(meas, 'power_sum')))
+                freq, data = self.project.compute_next_in_range(meas, f_start, f_stop, 'power_sum')
+                if len(freq):
+                    measurement_freq = freq
+                    curves.append((f"线对{pa}-{pb}_功率和", data))
             if self.worst_case_cb.isChecked():
-                curves.append((f"线对{pa}-{pb}_最差值",
-                               self.project.compute_next(meas, 'worst_case')))
+                freq, data = self.project.compute_next_in_range(meas, f_start, f_stop, 'worst_case')
+                if len(freq):
+                    measurement_freq = freq
+                    curves.append((f"线对{pa}-{pb}_最差值", data))
+            if measurement_freq is None:
+                continue
             if reference_freq is None:
-                reference_freq = meas.frequencies
+                reference_freq = measurement_freq
+            elif len(reference_freq) != len(measurement_freq) or not np.allclose(reference_freq, measurement_freq):
+                QMessageBox.warning(
+                    self, "无法导出 CSV",
+                    "所选线对的频率点不一致，无法共用同一频率轴导出。\n"
+                    "请只选择同一测试设置下生成的 S4P 文件，或分别导出。"
+                )
+                return
+        if not curves:
+            QMessageBox.information(self, "提示", "当前频率范围内没有可导出的数据，或未选择 NEXT 计算方式")
+            return
         if reference_freq is not None:
             export_csv(self, reference_freq, curves)
 

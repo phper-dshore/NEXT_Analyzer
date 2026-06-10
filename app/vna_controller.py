@@ -5,7 +5,7 @@ Requires:
 - Keysight VISA (installed with Keysight Connection Expert) on Windows
 - pyvisa Python package
 
-If VISA is not available, the controller operates in simulation mode for testing.
+If VISA is not available or the VNA cannot be reached, measurements are disabled.
 """
 
 import os
@@ -27,7 +27,7 @@ SCPI_SAVE_S4P = ':MMEM:STOR:TRAC:PORT 1, \'{}\', COMP, 1,2,3,4'
 # Export format options
 SCPI_EXPORT_FORMAT = 'MMEM:STOR:SNP:FORM {:s}'  # RI, DB, MA
 
-# Try to import pyvisa; if not available, use simulation mode
+# Try to import pyvisa; if not available, real measurements cannot run.
 try:
     import pyvisa
     _HAS_VISA = True
@@ -36,28 +36,22 @@ except ImportError:
 
 
 class VNAController:
-    """Controller for R&S ZNA67 VNA via VISA/SCPI.
-
-    Falls back to simulation mode when VISA is not available.
-    """
+    """Controller for R&S ZNA67 VNA via VISA/SCPI."""
 
     def __init__(self, resource_address: str = ""):
         self.resource_address = resource_address
         self.instrument = None
         self.rm = None
         self.connected = False
-        self.simulation_mode = not _HAS_VISA
         self._id = ""
-        self._sim_freq_start = 100e3
-        self._sim_freq_stop = 500e6
-        self._sim_points = 201
         # VNA local save path (e.g. C:\\HPData\\) — set by wizard config
         self.vna_local_path = "C:\\HPData\\"
 
     def list_resources(self) -> list:
         """List available VISA resources."""
         if not _HAS_VISA:
-            return ["Simulation: TCPIP0::192.168.1.100::inst0::INSTR (simulated)"]
+            logger.warning("pyvisa is not installed; no VNA resources are available")
+            return []
         try:
             self.rm = pyvisa.ResourceManager()
             return self.rm.list_resources()
@@ -79,11 +73,10 @@ class VNAController:
             self.resource_address = resource_address
 
         if not _HAS_VISA:
-            self.simulation_mode = True
-            self.connected = True
-            self._id = "Simulated Rohde & Schwarz ZNA67"
-            logger.info(f"VISA not available, running in simulation mode")
-            return True
+            logger.error("Cannot connect to VNA because pyvisa is not installed")
+            self.connected = False
+            self._id = ""
+            return False
 
         try:
             if self.rm is None:
@@ -95,7 +88,6 @@ class VNAController:
             idn = self.instrument.query(SCPI_INIT)
             self._id = idn.strip()
             self.connected = True
-            self.simulation_mode = False
             logger.info(f"Connected to VNA: {self._id}")
 
             # Auto-detect if ZNA67: use :MMEM:STOR:TRAC:PORT command
@@ -105,9 +97,8 @@ class VNAController:
             return True
         except Exception as e:
             logger.error(f"Failed to connect to VNA: {e}")
-            self.connected = False
-            self.simulation_mode = True
-            self._id = f"Simulation (connection failed: {e})"
+            self.disconnect()
+            self._id = ""
             return False
 
     def disconnect(self):
@@ -123,6 +114,20 @@ class VNAController:
     def is_connected(self) -> bool:
         return self.connected
 
+    def verify_connection(self) -> bool:
+        """Verify the VNA still responds before starting a measurement."""
+        if not self.connected or self.instrument is None:
+            return False
+        try:
+            idn = self.instrument.query(SCPI_INIT).strip()
+            if idn:
+                self._id = idn
+                return True
+        except Exception as e:
+            logger.error(f"VNA connection verification failed: {e}")
+        self.disconnect()
+        return False
+
     def get_id(self) -> str:
         return self._id
 
@@ -135,11 +140,6 @@ class VNAController:
             freq_stop_hz: Stop frequency in Hz.
             points: Number of sweep points.
         """
-        if self.simulation_mode:
-            logger.info(f"SIM: Configure measurement: {freq_start_hz/1e6:.1f}-"
-                        f"{freq_stop_hz/1e6:.1f} MHz, {points} points")
-            return
-
         if not self.connected:
             raise RuntimeError("VNA not connected")
 
@@ -148,10 +148,6 @@ class VNAController:
         self._write(SCPI_SET_POINTS.format(points))
         # Set format to dB/angle (Touchstone DB format)
         self._write(SCPI_EXPORT_FORMAT.format("DB"))
-        # Store for simulation file generation
-        self._sim_freq_start = freq_start_hz
-        self._sim_freq_stop = freq_stop_hz
-        self._sim_points = points
 
     def trigger_and_save(self, save_path: str) -> str:
         """Trigger a measurement and save S4P file.
@@ -166,16 +162,6 @@ class VNAController:
         Returns:
             Path to the saved S4P file on success, or empty string on failure.
         """
-        if self.simulation_mode:
-            logger.info(f"SIM: Trigger measurement and save to {save_path}")
-            self._create_simulated_s4p(
-                save_path,
-                freq_start_hz=self._sim_freq_start,
-                freq_stop_hz=self._sim_freq_stop,
-                points=self._sim_points
-            )
-            return save_path
-
         if not self.connected:
             raise RuntimeError("VNA not connected")
 
@@ -259,65 +245,6 @@ class VNAController:
             logger.debug(f"SCPI query: {command}")
             return self.instrument.query(command)
         return ""
-
-    def _create_simulated_s4p(self, filepath: str,
-                              freq_start_hz: float = 100e3,
-                              freq_stop_hz: float = 500e6,
-                              points: int = 201):
-        """Create a simulated S4P file for testing without VNA.
-
-        Args:
-            filepath: Output file path.
-            freq_start_hz: Start frequency in Hz (default 100 kHz).
-            freq_stop_hz: Stop frequency in Hz (default 500 MHz).
-            points: Number of frequency points (default 201).
-        """
-        import numpy as np
-
-        # Generate simulated 4-port S-parameters
-        n_points = points
-        freqs = np.linspace(freq_start_hz, freq_stop_hz, n_points)
-
-        with open(filepath, 'w') as f:
-            f.write("! Simulated S4P file for testing\n")
-            f.write("# HZ S DB R 50\n")
-
-            for freq in freqs:
-                f_mhz = freq / 1e6
-                # Create realistic-looking S-parameters
-                s11_db = -20 - 5 * np.random.random()
-                s11_ang = np.random.uniform(-180, 180)
-                s21_db = -1 - 0.01 * f_mhz - 2 * np.random.random()
-                s21_ang = np.random.uniform(-180, 180)
-
-                # NEXT decreases with frequency (gets worse)
-                next_db = -60 + 20 * (f_mhz / 500) + 2 * np.random.random()
-
-                vals = [freq, s11_db, s11_ang]
-
-                # Generate 16 S-parameters in standard Touchstone order
-                idx = 0
-                for col in range(4):  # input port
-                    for row in range(4):  # output port
-                        if idx == 0:
-                            pass  # S11 already done
-                        elif idx == 1:  # S21
-                            vals.extend([s21_db, s21_ang])
-                        elif idx == 4:  # S12
-                            vals.extend([s21_db, s21_ang])  # reciprocal
-                        elif idx == 5:  # S22
-                            vals.extend([s11_db, s11_ang])
-                        elif (row, col) in [(2, 0), (3, 0), (2, 1), (3, 1)]:
-                            # NEXT paths
-                            vals.extend([next_db, np.random.uniform(-180, 180)])
-                        else:
-                            vals.extend([-80 - 10 * np.random.random(),
-                                         np.random.uniform(-180, 180)])
-                        idx += 1
-
-                f.write(" ".join(f"{v:.6e}" if isinstance(v, float) and v > 1e6
-                                 else f"{v:.6f}" for v in vals) + "\n")
-
 
 def find_visa_resources() -> list:
     """Helper to find available VISA instruments.

@@ -7,6 +7,31 @@ from typing import List, Tuple, Optional
 import numpy as np
 
 
+def clip_interpolated_line(
+    frequencies: np.ndarray,
+    values: np.ndarray,
+    freq_start_hz: float,
+    freq_stop_hz: float,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Clip a line to a frequency range and interpolate its boundary points."""
+    if len(frequencies) < 2:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    order = np.argsort(frequencies)
+    frequencies = np.asarray(frequencies)[order]
+    values = np.asarray(values)[order]
+    fmin = max(min(freq_start_hz, freq_stop_hz), frequencies[0])
+    fmax = min(max(freq_start_hz, freq_stop_hz), frequencies[-1])
+    if fmin > fmax:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    inside = (frequencies > fmin) & (frequencies < fmax)
+    clipped_freq = np.concatenate(([fmin], frequencies[inside], [fmax]))
+    clipped_values = np.interp(clipped_freq, frequencies, values)
+    unique_freq, unique_indices = np.unique(clipped_freq, return_index=True)
+    return unique_freq, clipped_values[unique_indices]
+
+
 @dataclass
 class Measurement:
     """Represents one S4P test measurement covering two pairs.
@@ -132,6 +157,31 @@ class Project:
         else:  # power_sum
             linear = sum(10 ** (p / 10) for p in paths)
             return 10 * np.log10(linear)
+
+    def compute_next_in_range(
+        self,
+        measurement: Measurement,
+        freq_start_hz: float,
+        freq_stop_hz: float,
+        method: str = 'sdd21',
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Compute NEXT using only samples inside the requested frequency range."""
+        fmin = min(freq_start_hz, freq_stop_hz)
+        fmax = max(freq_start_hz, freq_stop_hz)
+        mask = (measurement.frequencies >= fmin) & (measurement.frequencies <= fmax)
+        if not np.any(mask):
+            return np.array([], dtype=float), np.array([], dtype=float)
+
+        ranged_measurement = Measurement(
+            file_path=measurement.file_path,
+            pair_a=measurement.pair_a,
+            pair_b=measurement.pair_b,
+            frequencies=measurement.frequencies[mask],
+            s_params=measurement.s_params[mask],
+            ports_a=measurement.ports_a,
+            ports_b=measurement.ports_b,
+        )
+        return ranged_measurement.frequencies, self.compute_next(ranged_measurement, method)
 
     def compute_next_single(self, measurement: Measurement, tx_port: int, rx_port: int) -> np.ndarray:
         """Compute NEXT for a single S-parameter path between tx_port and rx_port."""

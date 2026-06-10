@@ -14,6 +14,7 @@ from matplotlib.backends.backend_qt5agg import (
     NavigationToolbar2QT as NavigationToolbar,
 )
 from matplotlib.figure import Figure
+from app.data_model import clip_interpolated_line
 
 # Configure CJK font for Chinese text rendering
 _cjk_font_set = False
@@ -179,10 +180,9 @@ class PlotWidget(QWidget):
             freq = line['freq']
             value = line['value']
 
-            # Clip limit lines too
-            mask = (freq >= fmin) & (freq <= fmax)
-            clipped_freq = freq[mask]
-            clipped_val = value[mask]
+            clipped_freq, clipped_val = clip_interpolated_line(
+                freq, value, fmin, fmax
+            )
 
             if len(clipped_freq) == 0:
                 continue

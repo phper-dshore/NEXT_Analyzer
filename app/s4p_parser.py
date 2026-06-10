@@ -7,7 +7,6 @@ Supports:
 - Frequency units: Hz, kHz, MHz, GHz
 """
 
-import re
 import numpy as np
 
 
@@ -141,9 +140,10 @@ class S4PParser:
         values_per_freq = 1 + 16 * 2  # freq + 16 complex numbers (each = 2 values)
 
         if len(all_numbers) % values_per_freq != 0:
-            # Try the per-line format: 4 numbers per line, 9 lines per frequency point
-            # This is less reliable, let's do our best
-            pass
+            raise ValueError(
+                "Incomplete S4P data: expected each frequency point to contain "
+                f"{values_per_freq} numeric values, got {len(all_numbers)} total"
+            )
 
         n_complete = len(all_numbers) // values_per_freq
         n_freqs = n_complete

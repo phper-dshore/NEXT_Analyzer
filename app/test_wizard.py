@@ -373,6 +373,9 @@ class TestWizard(QWizard):
             if set(self._ports_a) & set(self._ports_b):
                 QMessageBox.warning(self, "错误", "线对 A 和线对 B 的 VNA 端口不能重叠")
                 return False
+            if self._freq_start >= self._freq_stop:
+                QMessageBox.warning(self, "错误", "起始频率必须小于终止频率")
+                return False
             return True
         return super().validateCurrentPage()
 
@@ -442,6 +445,14 @@ class TestWizard(QWizard):
     def _on_start_test(self):
         """Handle test button click."""
         if self._current_index >= len(self._combinations):
+            return
+        if not self.vna.verify_connection():
+            QMessageBox.warning(self, "网分未连接", "无法启动测试，请先连接并确认网分可正常响应")
+            self.start_btn.setEnabled(True)
+            self.skip_btn.setEnabled(True)
+            return
+        if self._freq_start >= self._freq_stop:
+            QMessageBox.warning(self, "频率范围错误", "起始频率必须小于终止频率")
             return
 
         pa, pb = self._combinations[self._current_index]
