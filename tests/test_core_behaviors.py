@@ -15,6 +15,8 @@ from app.export import (
 from app.s4p_parser import parse_s4p
 from app.vna_controller import VNAController
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 
 class S4PParserTests(unittest.TestCase):
     def test_rejects_incomplete_frequency_point(self):
@@ -153,6 +155,36 @@ class ReportCoverTests(unittest.TestCase):
 
         self.assertTrue(any(text.get_text() == "综合测试结果" for text in texts))
         self.assertGreater(lowest_result_y, 0.10)
+
+
+class MainWindowDisplayTests(unittest.TestCase):
+    def test_rebuild_tabs_adds_combined_display_first(self):
+        from PyQt5.QtWidgets import QApplication
+        from app.main_window import MainWindow
+        from app import settings_manager
+
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        try:
+            frequencies = np.array([1e6, 2e6])
+            s_params = np.zeros((2, 4, 4, 2), dtype=float)
+            s_params[:, 2, 0, 0] = 0.1
+            window.project.measurements = [
+                Measurement("pair_1_2.s4p", 1, 2, frequencies, s_params),
+                Measurement("pair_1_3.s4p", 1, 3, frequencies, s_params),
+            ]
+            window.pair_config.set_loaded_combos({(1, 2), (1, 3)})
+            window.pair_config._checkboxes[(1, 2)].setChecked(True)
+            window.pair_config._checkboxes[(1, 3)].setChecked(True)
+            window._rebuild_tabs()
+
+            self.assertEqual(window.tab_widget.tabText(0), "合并显示")
+            self.assertEqual(window.tab_widget.tabText(1), "线对 1-2")
+            self.assertEqual(window.tab_widget.tabText(2), "线对 1-3")
+        finally:
+            window.close()
+            if os.path.exists(settings_manager.SETTINGS_FILE):
+                os.remove(settings_manager.SETTINGS_FILE)
 
 
 if __name__ == "__main__":

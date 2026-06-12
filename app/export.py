@@ -421,6 +421,7 @@ def export_pdf_report(
     report_number: str = "",
     device_model: str = "",
     cable_length: float = 4.0,
+    summary_pages: Optional[List[Tuple[str, List[Tuple[str, np.ndarray, np.ndarray]]]]] = None,
 ):
     """Export a multi-page PDF report with cover, summary, and per-pair charts.
 
@@ -436,6 +437,8 @@ def export_pdf_report(
         report_number: Report number (e.g. "HTGSX20260608-001").
         device_model: VNA device model name.
         cable_length: Cable length in meters.
+        summary_pages: Optional per-pair pages used for the PASS/FAIL summary.
+                       When omitted, all chart pages are summarized.
     """
     default_name = f"{report_number}.pdf" if report_number else "NEXT_Report.pdf"
     filepath, _ = QFileDialog.getSaveFileName(
@@ -448,6 +451,7 @@ def export_pdf_report(
     try:
         date_str = datetime.now().strftime("%Y年%m月%d日")
         limit_names = [n for n, _, _, _, v in limit_lines if v and len(n) > 0]
+        summary_source = summary_pages if summary_pages is not None else pages
 
         with PdfPages(filepath) as pdf:
             # Page counter (starts after cover)
@@ -455,7 +459,7 @@ def export_pdf_report(
 
             # 1. Cover page (no page number)
             cover = _create_cover_page(
-                tester, date_str, total_pairs, len(pages), limit_names,
+                tester, date_str, total_pairs, len(summary_source), limit_names,
                 report_number, device_model, cable_length
             )
             pdf.savefig(cover)
@@ -464,8 +468,8 @@ def export_pdf_report(
             # 2. Summary pages. Keep row height readable for large pair counts.
             rows_per_summary_page = 28
             summary_chunks = [
-                pages[i:i + rows_per_summary_page]
-                for i in range(0, len(pages), rows_per_summary_page)
+                summary_source[i:i + rows_per_summary_page]
+                for i in range(0, len(summary_source), rows_per_summary_page)
             ] or [[]]
             for index, chunk in enumerate(summary_chunks, start=1):
                 summary = _create_summary_page(
@@ -493,7 +497,7 @@ def export_pdf_report(
             parent, "导出成功",
             f"PDF 报告已保存到:\n{filepath}\n"
             f"共 {len(pages) + len(summary_chunks) + 1} 页"
-            f"（封面 + {len(summary_chunks)} 页汇总 + {len(pages)} 线对图表）"
+            f"（封面 + {len(summary_chunks)} 页汇总 + {len(pages)} 图表）"
         )
     except Exception as e:
         QMessageBox.critical(parent, "导出失败", f"导出 PDF 时出错:\n{str(e)}")

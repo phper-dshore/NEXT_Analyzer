@@ -385,6 +385,13 @@ class MainWindow(QMainWindow):
                 curves.append((f"{pa}-{pb} 最差值", freq, data))
         return curves
 
+    def _get_combined_curves(self, combos):
+        """Collect all curves for the selected pair combinations."""
+        curves = []
+        for pa, pb in combos:
+            curves.extend(self._get_curves_for_pair(pa, pb))
+        return curves
+
     def _get_limit_line_data(self):
         lines = []
         for line in self.project.limit_lines:
@@ -403,6 +410,14 @@ class MainWindow(QMainWindow):
         if not selected:
             self._show_empty_tab()
             return
+        combined_curves = self._get_combined_curves(selected)
+        if combined_curves:
+            tab = PlotWidget(title="NEXT 合并显示")
+            tab.set_curves_multi(combined_curves)
+            tab.set_freq_range(f_start, f_stop)
+            if limit_lines:
+                tab.set_limit_lines(limit_lines)
+            self.tab_widget.addTab(tab, "合并显示")
         for pa, pb in selected:
             curves = self._get_curves_for_pair(pa, pb)
             if not curves:
@@ -724,14 +739,19 @@ class MainWindow(QMainWindow):
         if not selected:
             QMessageBox.information(self, "提示", "没有选中的线对组合")
             return
-        pages = []
+        per_pair_pages = []
         for pa, pb in selected:
             curves = self._get_curves_for_pair(pa, pb)
             if curves:
-                pages.append((f"线对 {pa}-{pb}", curves))
-        if not pages:
+                per_pair_pages.append((f"线对 {pa}-{pb}", curves))
+        if not per_pair_pages:
             QMessageBox.information(self, "提示", "没有可导出的数据")
             return
+        combined_curves = self._get_combined_curves(selected)
+        chart_pages = []
+        if combined_curves:
+            chart_pages.append(("合并显示", combined_curves))
+        chart_pages.extend(per_pair_pages)
         limit_lines = self._get_limit_line_data()
         from app.export import export_pdf_report as do_export
         f_start, f_stop = self._get_display_freq_range()
@@ -739,10 +759,10 @@ class MainWindow(QMainWindow):
         device_model = self.project.device_model
         cable_length = self.cable_length_spin.value()
         do_export(
-            self, pages, limit_lines, freq_range=(f_start, f_stop),
+            self, chart_pages, limit_lines, freq_range=(f_start, f_stop),
             tester="HAITANG", total_pairs=self.project.total_pairs,
             report_number=report_number, device_model=device_model,
-            cable_length=cable_length
+            cable_length=cable_length, summary_pages=per_pair_pages
         )
 
     def _save_report_s4p_files(self):
